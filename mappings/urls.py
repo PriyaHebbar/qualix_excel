@@ -9,5 +9,6 @@ urlpatterns = [
     path('<int:mapping_id>/', views.mapping_detail_view, name='detail'),
     path('<int:mapping_id>/edit/', views.mapping_edit_view, name='edit'),
     path('<int:mapping_id>/delete/', views.mapping_delete_view, name='delete'),
+    path('projects/create/', views.project_create_view, name='project_create'),
     path('api/columns/<int:mapping_id>/', views.api_mapping_columns, name='api_columns'),
 ]

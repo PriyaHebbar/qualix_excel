@@ -958,9 +958,23 @@ class ValidationEngine:
                 for key in alias_to_rule.values():
                     results[key] = None
         except Exception as e:
-            logger.error(f"Error in batch query execution on {full_table}: {e}")
-            for key in alias_to_rule.values():
-                results[key] = None
+            logger.error(
+                f"Error in batch query execution on {full_table}: {e}. "
+                f"Falling back to individual queries."
+            )
+            for col_mapping, operation in rules:
+                key = (col_mapping.id, operation)
+                col = col_mapping.source_column if is_source else col_mapping.target_column
+                try:
+                    val = self._get_value(
+                        engine, schema, table, col, operation, is_source=is_source
+                    )
+                    results[key] = val
+                except Exception as ind_err:
+                    logger.error(
+                        f"Individual query failed for {operation} on {col_mapping} ({col}): {ind_err}"
+                    )
+                    results[key] = None
         logger.info(
             f"LEAVING _fetch_engine_aggregates_batch"
             f"({'source' if is_source else 'target'})"

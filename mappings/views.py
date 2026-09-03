@@ -4,9 +4,9 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import JsonResponse
-from django.db.models import Q
+from django.db.models import Q, Count
 
-from .models import Mapping, ColumnMapping, ValidationRule
+from .models import Mapping, ColumnMapping, ValidationRule, Project
 from connections.models import DataConnection
 from accounts.decorators import contributor_or_admin_required
 
@@ -17,10 +17,21 @@ logger = logging.getLogger(__name__)
 def mapping_list_view(request):
     """List all mappings."""
     query = request.GET.get('query', '').strip()
+    selected_project_id = request.GET.get('project', '').strip()
     
     mappings = Mapping.objects.filter(is_active=True).select_related(
-        'source_connection', 'target_connection', 'created_by'
+        'source_connection', 'target_connection', 'created_by', 'project'
     )
+    
+    selected_project = None
+    if selected_project_id == 'unassigned':
+        mappings = mappings.filter(project__isnull=True)
+    elif selected_project_id.isdigit():
+        mappings = mappings.filter(project_id=selected_project_id)
+        try:
+            selected_project = Project.objects.get(id=selected_project_id)
+        except Project.DoesNotExist:
+            pass
     
     if query:
         mappings = mappings.filter(
@@ -32,7 +43,22 @@ def mapping_list_view(request):
             Q(target_connection__name__icontains=query)
         )
         
-    return render(request, 'mappings/list.html', {'mappings': mappings, 'query': query})
+    total_mappings_count = Mapping.objects.filter(is_active=True).count()
+    unassigned_count = Mapping.objects.filter(is_active=True, project__isnull=True).count()
+    projects = Project.objects.annotate(
+        pipeline_count=Count('mappings', filter=Q(mappings__is_active=True))
+    )
+        
+    context = {
+        'mappings': mappings,
+        'query': query,
+        'projects': projects,
+        'selected_project_id': selected_project_id,
+        'selected_project': selected_project,
+        'total_mappings_count': total_mappings_count,
+        'unassigned_count': unassigned_count,
+    }
+    return render(request, 'mappings/list.html', context)
 
 
 def get_datatype_category(type_str, name_str=''):
@@ -65,6 +91,7 @@ def mapping_create_view(request):
     """Create a new source-target mapping."""
     connections = DataConnection.objects.filter(is_active=True)
     operations = ValidationRule.OPERATION_CHOICES
+    projects = Project.objects.all()
 
     if request.method == 'POST':
         try:
@@ -74,9 +101,13 @@ def mapping_create_view(request):
                 return render(request, 'mappings/create.html', {
                     'connections': connections,
                     'operations': operations,
+                    'projects': projects,
                 })
 
             description = request.POST.get('description', '')
+            project_id = request.POST.get('project', '').strip()
+            if not project_id or project_id == 'unassigned':
+                project_id = None
             source_conn_id = request.POST.get('source_connection')
             source_catalog = request.POST.get('source_catalog', '')
             source_schema = request.POST.get('source_schema', '')
@@ -141,6 +172,7 @@ def mapping_create_view(request):
             mapping_data = {
                 'name': name,
                 'description': description,
+                'project_id': project_id,
                 'source_connection_id': source_conn_id,
                 'source_catalog': source_catalog,
                 'source_schema': source_schema,
@@ -327,6 +359,8 @@ def mapping_create_view(request):
     return render(request, 'mappings/create.html', {
         'connections': connections,
         'operations': operations,
+        'projects': projects,
+        'selected_project_id': request.GET.get('project', '').strip(),
     })
 
 
@@ -384,6 +418,7 @@ def mapping_edit_view(request, mapping_id):
     mapping = get_object_or_404(Mapping, id=mapping_id, is_active=True)
     connections = DataConnection.objects.filter(is_active=True)
     operations = ValidationRule.OPERATION_CHOICES
+    projects = Project.objects.all()
 
     if request.method == 'POST':
         try:
@@ -394,9 +429,13 @@ def mapping_edit_view(request, mapping_id):
                     'mapping': mapping,
                     'connections': connections,
                     'operations': operations,
+                    'projects': projects,
                 })
 
             description = request.POST.get('description', '')
+            project_id = request.POST.get('project', '').strip()
+            if not project_id or project_id == 'unassigned':
+                project_id = None
             source_conn_id = request.POST.get('source_connection')
             source_catalog = request.POST.get('source_catalog', '')
             source_schema = request.POST.get('source_schema', '')
@@ -447,6 +486,7 @@ def mapping_edit_view(request, mapping_id):
             mapping_data = {
                 'name': name,
                 'description': description,
+                'project_id': project_id,
                 'source_connection_id': source_conn_id,
                 'source_catalog': source_catalog,
                 'source_schema': source_schema,
@@ -657,6 +697,7 @@ def mapping_edit_view(request, mapping_id):
     draft_data = {
         'name': mapping.name,
         'description': mapping.description,
+        'project': mapping.project_id or '',
         'source_connection': mapping.source_connection_id,
         'source_connection_type': mapping.source_connection.connection_type if mapping.source_connection else '',
         'source_catalog': getattr(mapping, 'source_catalog', ''),
@@ -698,4 +739,53 @@ def mapping_edit_view(request, mapping_id):
         'mapping_json': mapping_json,
         'connections': connections,
         'operations': operations,
+        'projects': projects,
     })
+
+
+@login_required
+@contributor_or_admin_required
+def project_create_view(request):
+    """API endpoint to create a new project via AJAX/POST."""
+    if request.method == 'POST':
+        try:
+            name = request.POST.get('name', '').strip()
+            description = request.POST.get('description', '').strip()
+            if not name:
+                return JsonResponse({'success': False, 'error': 'Project name is required.'}, status=400)
+            
+            # Check if project already exists
+            if Project.objects.filter(name__iexact=name).exists():
+                return JsonResponse({'success': False, 'error': f'Project "{name}" already exists.'}, status=400)
+                
+            project = Project.objects.create(
+                name=name,
+                description=description,
+                created_by=request.user
+            )
+            
+            try:
+                from logs.models import AuditLog
+                AuditLog.objects.create(
+                    user=request.user,
+                    action=f'Created Project: {name}',
+                    entity_type='Project',
+                    entity_id=project.id,
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    level='info',
+                )
+            except Exception:
+                pass
+                
+            return JsonResponse({
+                'success': True,
+                'project': {
+                    'id': project.id,
+                    'name': project.name,
+                    'description': project.description
+                }
+            })
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+            
+    return JsonResponse({'success': False, 'error': 'Method not allowed.'}, status=405)

@@ -4,6 +4,20 @@ from django.core.validators import MaxLengthValidator
 from connections.models import DataConnection
 
 
+class Project(models.Model):
+    name = models.CharField(max_length=200, unique=True)
+    description = models.TextField(blank=True, validators=[MaxLengthValidator(1000)])
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='projects')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
 class Mapping(models.Model):
     """Source-to-Target mapping definition."""
 
@@ -15,6 +29,9 @@ class Mapping(models.Model):
 
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, validators=[MaxLengthValidator(1000)])
+    project = models.ForeignKey(
+        Project, on_delete=models.SET_NULL, null=True, blank=True, related_name='mappings'
+    )
 
     # Source
     source_connection = models.ForeignKey(

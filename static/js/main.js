@@ -999,6 +999,8 @@ async function restoreMappingDraft(data) {
         // 1. Restore simple text / description fields safely
         const nameInput = document.querySelector('[name="name"]');
         if (nameInput) nameInput.value = data['name'] || '';
+        const projectInput = document.querySelector('[name="project"]');
+        if (projectInput) projectInput.value = data['project'] || 'unassigned';
         const descInput = document.querySelector('[name="description"]');
         if (descInput) descInput.value = data['description'] || '';
 
